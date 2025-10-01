@@ -1,0 +1,1003 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hello Knight</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(to bottom, #0a0a1a, #1a0a2a, #0a0a1a);
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+        }
+        canvas {
+            border: 4px solid #4a3a5a;
+            background: linear-gradient(to bottom, #0f0820, #1a0f2a);
+            box-shadow: 0 0 50px rgba(138, 43, 226, 0.5), inset 0 0 100px rgba(0,0,0,0.5);
+            image-rendering: crisp-edges;
+        }
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #e0d0ff;
+            background: rgba(20, 10, 40, 0.9);
+            padding: 20px;
+            border-radius: 12px;
+            font-size: 14px;
+            border: 2px solid #6a4a8a;
+            box-shadow: 0 0 20px rgba(138, 43, 226, 0.3);
+            backdrop-filter: blur(10px);
+        }
+        #info strong {
+            color: #c0a0ff;
+            font-size: 18px;
+            text-shadow: 0 0 10px rgba(192, 160, 255, 0.8);
+        }
+        #info div {
+            margin: 5px 0;
+            opacity: 0.9;
+        }
+        @keyframes glow {
+            0%, 100% { text-shadow: 0 0 10px rgba(192, 160, 255, 0.8); }
+            50% { text-shadow: 0 0 20px rgba(192, 160, 255, 1); }
+        }
+        #info strong {
+            animation: glow 2s infinite;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <strong>HELLO KNIGHT</strong><br><br>
+        <div>← → : Muovi</div>
+        <div>SPAZIO: Salta</div>
+        <div>X: Attacco</div>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+    
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 800;
+        canvas.height = 600;
+
+        let lastTime = 0;
+        let gameState = 'playing';
+        let deathTimer = 0;
+        let wave = 1;
+
+        const particles = [];
+        const enemies = [];
+        const projectiles = [];
+        const explosions = [];
+
+        const player = {
+            x: 100,
+            y: 400,
+            width: 20,
+            height: 50,
+            vx: 0,
+            vy: 0,
+            speed: 400,
+            jumpPower: 700,
+            grounded: false,
+            health: 5,
+            maxHealth: 5,
+            facing: 1,
+            invincible: 0
+        };
+
+        const platforms = [
+            {x: 0, y: 550, width: 800, height: 50},
+            {x: 150, y: 450, width: 120, height: 20},
+            {x: 350, y: 380, width: 100, height: 20},
+            {x: 500, y: 300, width: 150, height: 20},
+            {x: 200, y: 250, width: 100, height: 20},
+            {x: 600, y: 200, width: 120, height: 20},
+            {x: 100, y: 150, width: 100, height: 20},
+            {x: 400, y: 100, width: 150, height: 20}
+        ];
+
+        function createEnemy(x, y) {
+            return {
+                x, y, radius: 15,
+                vx: (Math.random() * 150 + 100) * (Math.random() > 0.5 ? 1 : -1),
+                vy: (Math.random() * 150 + 100) * (Math.random() > 0.5 ? 1 : -1),
+                health: 3, maxHealth: 3,
+                hue: Math.random() * 30,
+                type: 'melee'
+            };
+        }
+        
+        function createExploder(x, y) {
+            return {
+                x, y, radius: 15,
+                vx: 0, vy: 0,
+                health: 3, maxHealth: 3,
+                hue: 120,
+                type: 'exploder',
+                explodeTimer: 0,
+                explodeDuration: 2
+            };
+        }
+        
+        function createRangedEnemy(x, y) {
+            return {
+                x, y, radius: 18,
+                vx: 0, vy: 0,
+                health: 3, maxHealth: 3,
+                hue: 200,
+                type: 'ranged',
+                shootTimer: 0,
+                shootCooldown: 2.5
+            };
+        }
+        
+        function createProjectile(x, y, targetX, targetY) {
+            const dx = targetX - x;
+            const dy = targetY - y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const speed = 250;
+            return {
+                x, y,
+                vx: (dx / dist) * speed,
+                vy: (dy / dist) * speed,
+                radius: 5,
+                lifetime: 3
+            };
+        }
+
+        function createExplosion(x, y) {
+            return {
+                x, y,
+                radius: 0,
+                maxRadius: 80,
+                duration: 0.5,
+                timer: 0
+            };
+        }
+
+        enemies.push(createEnemy(300, 200));
+        enemies.push(createEnemy(500, 150));
+        enemies.push(createEnemy(650, 250));
+        enemies.push(createRangedEnemy(400, 120));
+        
+        function spawnNewWave() {
+            wave++;
+            player.health = Math.min(player.health + 2, player.maxHealth);
+            
+            enemies.length = 0;
+            projectiles.length = 0;
+            
+            const numMelee = Math.floor(Math.random() * 3) + 2;
+            const numExploder = Math.floor(Math.random() * 2) + 1;
+            const numRanged = Math.floor(Math.random() * 2) + 1;
+            
+            for (let i = 0; i < numMelee; i++) {
+                const x = Math.random() * (canvas.width - 200) + 100;
+                const y = Math.random() * 350 + 50;
+                enemies.push(createEnemy(x, y));
+            }
+            
+            for (let i = 0; i < numExploder; i++) {
+                const x = Math.random() * (canvas.width - 200) + 100;
+                const y = Math.random() * 350 + 50;
+                enemies.push(createExploder(x, y));
+            }
+            
+            for (let i = 0; i < numRanged; i++) {
+                const x = Math.random() * (canvas.width - 200) + 100;
+                const y = Math.random() * 250 + 50;
+                enemies.push(createRangedEnemy(x, y));
+            }
+        }
+
+        let attacking = false;
+        let attackTimer = 0;
+        const attackDuration = 0.25;
+        const attackRange = 70;
+        const attackArc = Math.PI * 0.2;
+        let attackAngle = 0;
+
+        const keys = {};
+        window.addEventListener('keydown', e => {
+            keys[e.key] = true;
+            if (e.key === ' ') e.preventDefault();
+            if (gameState === 'dead' && (e.key === 'r' || e.key === 'R')) {
+                restartGame();
+            }
+        });
+        window.addEventListener('keyup', e => keys[e.key] = false);
+
+        function createParticle(x, y, color, vx, vy, life) {
+            particles.push({
+                x, y, color, vx, vy, life, maxLife: life, size: Math.random() * 3 + 2
+            });
+        }
+
+        function updateParticles(dt) {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.x += p.vx * dt;
+                p.y += p.vy * dt;
+                p.vy += 500 * dt;
+                p.life -= dt;
+                if (p.life <= 0) particles.splice(i, 1);
+            }
+        }
+
+        function drawParticles() {
+            particles.forEach(p => {
+                const alpha = p.life / p.maxLife;
+                ctx.globalAlpha = alpha;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size * alpha, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.globalAlpha = 1;
+        }
+        
+        function drawProjectiles() {
+            projectiles.forEach(proj => {
+                const glowGradient = ctx.createRadialGradient(proj.x, proj.y, 0, proj.x, proj.y, proj.radius * 3);
+                glowGradient.addColorStop(0, 'rgba(255, 255, 150, 0.6)');
+                glowGradient.addColorStop(1, 'transparent');
+                ctx.fillStyle = glowGradient;
+                ctx.beginPath();
+                ctx.arc(proj.x, proj.y, proj.radius * 3, 0, Math.PI * 2);
+                ctx.fill();
+                
+                const projGradient = ctx.createRadialGradient(proj.x - 2, proj.y - 2, 1, proj.x, proj.y, proj.radius);
+                projGradient.addColorStop(0, '#ffff99');
+                projGradient.addColorStop(1, '#ffaa00');
+                ctx.fillStyle = projGradient;
+                ctx.beginPath();
+                ctx.arc(proj.x, proj.y, proj.radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.strokeStyle = '#ff8800';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            });
+        }
+
+        function drawExplosions() {
+            explosions.forEach(exp => {
+                const progress = exp.timer / exp.duration;
+                const currentRadius = exp.maxRadius * progress;
+                const alpha = 1 - progress;
+                
+                ctx.strokeStyle = `rgba(255, 100, 50, ${alpha * 0.8})`;
+                ctx.lineWidth = 8;
+                ctx.beginPath();
+                ctx.arc(exp.x, exp.y, currentRadius, 0, Math.PI * 2);
+                ctx.stroke();
+                
+                const innerGradient = ctx.createRadialGradient(exp.x, exp.y, 0, exp.x, exp.y, currentRadius * 0.7);
+                innerGradient.addColorStop(0, `rgba(255, 200, 100, ${alpha * 0.6})`);
+                innerGradient.addColorStop(1, 'transparent');
+                ctx.fillStyle = innerGradient;
+                ctx.beginPath();
+                ctx.arc(exp.x, exp.y, currentRadius * 0.7, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        function drawPlayer() {
+            ctx.save();
+            
+            if (player.invincible > 0) {
+                ctx.globalAlpha = 0.5 + Math.sin(Date.now() * 0.02) * 0.3;
+            }
+            
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.beginPath();
+            ctx.ellipse(player.x + player.width / 2, player.y + player.height + 5, player.width / 2, 5, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            const bodyWidth = player.width * 0.6;
+            const bodyX = player.x + (player.width - bodyWidth) / 2;
+            const gradient = ctx.createLinearGradient(bodyX, player.y + 18, bodyX, player.y + player.height);
+            gradient.addColorStop(0, '#ffffff');
+            gradient.addColorStop(1, '#e0e0e0');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(bodyX, player.y + 18, bodyWidth, player.height - 18);
+            
+            ctx.strokeStyle = '#c0c0c0';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(bodyX, player.y + 18, bodyWidth, player.height - 18);
+            
+            const headRadius = 15;
+            const headGradient = ctx.createRadialGradient(
+                player.x + player.width / 2, player.y + 3, 3,
+                player.x + player.width / 2, player.y + 5, headRadius
+            );
+            headGradient.addColorStop(0, '#ffffff');
+            headGradient.addColorStop(1, '#e0e0e0');
+            ctx.beginPath();
+            ctx.arc(player.x + player.width / 2, player.y + 5, headRadius, 0, Math.PI * 2);
+            ctx.fillStyle = headGradient;
+            ctx.fill();
+            ctx.strokeStyle = '#c0c0c0';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            ctx.fillStyle = '#2a2a3a';
+            ctx.font = 'bold 8px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('hello', player.x + player.width / 2, player.y + 8);
+            
+            if (attacking) {
+                const attackProgress = 1 - (attackTimer / attackDuration);
+                const swingAngle = attackAngle + (attackProgress * Math.PI * 1.2);
+                
+                ctx.save();
+                ctx.translate(player.x + player.width / 2, player.y + player.height / 2);
+                
+                for (let i = 0; i < 5; i++) {
+                    const trailProgress = attackProgress - (i * 0.15);
+                    if (trailProgress < 0) continue;
+                    
+                    const trailAngle = attackAngle + (trailProgress * Math.PI * 1.2);
+                    const alpha = (1 - i * 0.2) * 0.4;
+                    
+                    ctx.strokeStyle = `rgba(200, 220, 255, ${alpha})`;
+                    ctx.lineWidth = 8 - i;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, attackRange, trailAngle - attackArc / 2, trailAngle + attackArc / 2);
+                    ctx.stroke();
+                }
+                
+                const mainGradient = ctx.createRadialGradient(0, 0, attackRange * 0.5, 0, 0, attackRange);
+                mainGradient.addColorStop(0, 'rgba(255, 255, 255, 0.9)');
+                mainGradient.addColorStop(1, 'rgba(150, 200, 255, 0.6)');
+                ctx.strokeStyle = mainGradient;
+                ctx.lineWidth = 10;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.arc(0, 0, attackRange, swingAngle - attackArc / 2, swingAngle + attackArc / 2);
+                ctx.stroke();
+                
+                for (let i = 0; i < 3; i++) {
+                    const particleAngle = swingAngle - attackArc / 2 + (attackArc * i / 2);
+                    const px = Math.cos(particleAngle) * attackRange;
+                    const py = Math.sin(particleAngle) * attackRange;
+                    
+                    ctx.fillStyle = `rgba(255, 255, 255, ${0.8 * attackProgress})`;
+                    ctx.beginPath();
+                    ctx.arc(px, py, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                
+                ctx.restore();
+            }
+            
+            ctx.restore();
+        }
+
+        function drawPlatforms() {
+            platforms.forEach((p, i) => {
+                const gradient = ctx.createLinearGradient(p.x, p.y, p.x, p.y + p.height);
+                gradient.addColorStop(0, '#3a3a5a');
+                gradient.addColorStop(1, '#2a2a3a');
+                ctx.fillStyle = gradient;
+                ctx.fillRect(p.x, p.y, p.width, p.height);
+                
+                ctx.strokeStyle = '#5a5a7a';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(p.x + p.width, p.y);
+                ctx.stroke();
+                
+                ctx.strokeStyle = '#4a4a6a';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(p.x, p.y, p.width, p.height);
+                
+                if (p.height > 30) {
+                    ctx.fillStyle = 'rgba(90, 90, 122, 0.3)';
+                    for (let j = 0; j < 3; j++) {
+                        ctx.fillRect(p.x + 10 + j * 30, p.y + 10, 20, 5);
+                    }
+                }
+            });
+        }
+
+        function drawEnemies() {
+            enemies.forEach(e => {
+                if (e.health <= 0 && e.type !== 'exploder') return;
+                if (e.health <= 0 && e.type === 'exploder' && e.explodeTimer >= e.explodeDuration) return;
+                
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+                ctx.beginPath();
+                ctx.ellipse(e.x, e.y + e.radius + 5, e.radius * 0.8, 4, 0, 0, Math.PI * 2);
+                ctx.fill();
+                
+                const glowGradient = ctx.createRadialGradient(e.x, e.y, e.radius * 0.5, e.x, e.y, e.radius * 2);
+                glowGradient.addColorStop(0, `hsla(${e.hue}, 80%, 60%, 0.3)`);
+                glowGradient.addColorStop(1, 'transparent');
+                ctx.fillStyle = glowGradient;
+                ctx.beginPath();
+                ctx.arc(e.x, e.y, e.radius * 2, 0, Math.PI * 2);
+                ctx.fill();
+                
+                const enemyGradient = ctx.createRadialGradient(e.x - 5, e.y - 5, 2, e.x, e.y, e.radius);
+                enemyGradient.addColorStop(0, `hsl(${e.hue}, 100%, 65%)`);
+                enemyGradient.addColorStop(1, `hsl(${e.hue}, 100%, 45%)`);
+                ctx.beginPath();
+                ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
+                ctx.fillStyle = enemyGradient;
+                ctx.fill();
+                ctx.strokeStyle = `hsl(${e.hue}, 100%, 30%)`;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                
+                if (e.type === 'exploder') {
+                    if (e.health <= 0) {
+                        const pulseScale = 1 + Math.sin(e.explodeTimer * 10) * 0.2;
+                        ctx.strokeStyle = `rgba(255, 50, 50, ${1 - e.explodeTimer / e.explodeDuration})`;
+                        ctx.lineWidth = 3;
+                        ctx.beginPath();
+                        ctx.arc(e.x, e.y, e.radius * pulseScale, 0, Math.PI * 2);
+                        ctx.stroke();
+                    }
+                    
+                    ctx.fillStyle = '#0a0a0a';
+                    ctx.beginPath();
+                    ctx.arc(e.x - 5, e.y - 3, 3, 0, Math.PI * 2);
+                    ctx.arc(e.x + 5, e.y - 3, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    ctx.fillStyle = '#ffff00';
+                    ctx.beginPath();
+                    ctx.arc(e.x - 5, e.y - 3, 1.5, 0, Math.PI * 2);
+                    ctx.arc(e.x + 5, e.y - 3, 1.5, 0, Math.PI * 2);
+                    ctx.fill();
+                } else if (e.type === 'ranged') {
+                    ctx.fillStyle = '#0a0a1a';
+                    ctx.beginPath();
+                    ctx.arc(e.x - 6, e.y - 4, 4, 0, Math.PI * 2);
+                    ctx.arc(e.x + 6, e.y - 4, 4, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    ctx.fillStyle = `hsl(${e.hue}, 100%, 70%)`;
+                    ctx.beginPath();
+                    ctx.arc(e.x - 6, e.y - 4, 2, 0, Math.PI * 2);
+                    ctx.arc(e.x + 6, e.y - 4, 2, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    if (e.shootTimer > e.shootCooldown - 0.5) {
+                        const chargeProgress = (e.shootTimer - (e.shootCooldown - 0.5)) / 0.5;
+                        ctx.strokeStyle = `rgba(255, 255, 100, ${chargeProgress})`;
+                        ctx.lineWidth = 3;
+                        ctx.beginPath();
+                        ctx.arc(e.x, e.y, e.radius + 5, 0, Math.PI * 2 * chargeProgress);
+                        ctx.stroke();
+                    }
+                } else {
+                    ctx.fillStyle = '#1a0a0a';
+                    ctx.beginPath();
+                    ctx.arc(e.x - 5, e.y - 3, 3, 0, Math.PI * 2);
+                    ctx.arc(e.x + 5, e.y - 3, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                    ctx.beginPath();
+                    ctx.arc(e.x - 4, e.y - 4, 1.5, 0, Math.PI * 2);
+                    ctx.arc(e.x + 6, e.y - 4, 1.5, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                
+                if (e.health > 0) {
+                    const barWidth = 30;
+                    const barHeight = 5;
+                    const healthPercent = e.health / e.maxHealth;
+                    const barY = e.y - e.radius - 12;
+                    
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                    ctx.fillRect(e.x - barWidth/2 - 1, barY - 1, barWidth + 2, barHeight + 2);
+                    
+                    const barGradient = ctx.createLinearGradient(e.x - barWidth/2, 0, e.x + barWidth/2, 0);
+                    barGradient.addColorStop(0, '#ff3030');
+                    barGradient.addColorStop(healthPercent, '#ff6060');
+                    barGradient.addColorStop(healthPercent, 'rgba(100, 100, 100, 0.3)');
+                    barGradient.addColorStop(1, 'rgba(80, 80, 80, 0.3)');
+                    ctx.fillStyle = barGradient;
+                    ctx.fillRect(e.x - barWidth/2, barY, barWidth, barHeight);
+                    
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(e.x - barWidth/2, barY, barWidth, barHeight);
+                }
+            });
+        }
+
+        function updatePlayer(dt) {
+            if (keys['ArrowLeft']) {
+                player.vx = -player.speed;
+                player.facing = -1;
+            } else if (keys['ArrowRight']) {
+                player.vx = player.speed;
+                player.facing = 1;
+            } else {
+                player.vx = 0;
+            }
+
+            if (keys[' '] && player.grounded) {
+                player.vy = -player.jumpPower;
+                player.grounded = false;
+                for (let i = 0; i < 10; i++) {
+                    createParticle(
+                        player.x + player.width / 2 + (Math.random() - 0.5) * player.width,
+                        player.y + player.height,
+                        '#ffffff',
+                        (Math.random() - 0.5) * 100,
+                        Math.random() * -50,
+                        0.5
+                    );
+                }
+            }
+
+            if (keys['x'] && !attacking) {
+                attacking = true;
+                attackTimer = attackDuration;
+                
+                if (player.facing > 0) {
+                    attackAngle = -Math.PI / 3;
+                } else {
+                    attackAngle = Math.PI - Math.PI / 3;
+                }
+                
+                enemies.forEach(e => {
+                    if (e.health <= 0) return;
+                    const dx = e.x - (player.x + player.width / 2);
+                    const dy = e.y - (player.y + player.height / 2);
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    const angleToEnemy = Math.atan2(dy, dx);
+                    
+                    if (dist < attackRange + e.radius) {
+                        let inArc = false;
+                        const swingStart = attackAngle - attackArc / 2;
+                        const swingEnd = attackAngle + attackArc / 2 + Math.PI * 1.2;
+                        
+                        let normalizedAngle = angleToEnemy;
+                        while (normalizedAngle < swingStart) normalizedAngle += Math.PI * 2;
+                        while (normalizedAngle > swingEnd) normalizedAngle -= Math.PI * 2;
+                        
+                        if (normalizedAngle >= swingStart && normalizedAngle <= swingEnd) {
+                            inArc = true;
+                        }
+                        
+                        if (inArc) {
+                            e.health -= 1;
+                            for (let i = 0; i < 15; i++) {
+                                createParticle(
+                                    e.x, e.y,
+                                    `hsl(${e.hue}, 100%, 50%)`,
+                                    (Math.random() - 0.5) * 300,
+                                    (Math.random() - 0.5) * 300,
+                                    0.6
+                                );
+                            }
+                        }
+                    }
+                });
+            }
+
+            if (attacking) {
+                attackTimer -= dt;
+                if (attackTimer <= 0) attacking = false;
+            }
+
+            if (player.invincible > 0) {
+                player.invincible -= dt;
+            }
+
+            const gravity = 1500;
+            player.vy += gravity * dt;
+            
+            player.x += player.vx * dt;
+            player.y += player.vy * dt;
+
+            player.grounded = false;
+            platforms.forEach(p => {
+                if (player.x + player.width > p.x && 
+                    player.x < p.x + p.width &&
+                    player.y + player.height > p.y &&
+                    player.y + player.height < p.y + p.height + Math.abs(player.vy * dt)) {
+                    player.y = p.y - player.height;
+                    player.vy = 0;
+                    player.grounded = true;
+                }
+            });
+
+            if (player.x < 0) player.x = 0;
+            if (player.x + player.width > canvas.width) player.x = canvas.width - player.width;
+            if (player.y > canvas.height) {
+                player.y = 100;
+                player.x = 100;
+                player.vy = 0;
+                player.health = Math.max(player.health - 1, 0);
+            }
+            
+            if (player.health <= 0 && gameState === 'playing') {
+                gameState = 'dead';
+                deathTimer = 0;
+            }
+        }
+
+        function updateEnemies(dt) {
+            enemies.forEach(e => {
+                if (e.type === 'exploder' && e.health <= 0) {
+                    e.explodeTimer += dt;
+                    if (e.explodeTimer >= e.explodeDuration) {
+                        explosions.push(createExplosion(e.x, e.y));
+                        
+                        const dx = e.x - (player.x + player.width / 2);
+                        const dy = e.y - (player.y + player.height / 2);
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        
+                        if (dist < 80 && player.invincible <= 0) {
+                            player.health -= 2;
+                            player.invincible = 1.5;
+                            
+                            for (let i = 0; i < 20; i++) {
+                                createParticle(
+                                    player.x + player.width / 2,
+                                    player.y + player.height / 2,
+                                    '#ff4444',
+                                    (Math.random() - 0.5) * 300,
+                                    (Math.random() - 0.5) * 300,
+                                    0.6
+                                );
+                            }
+                        }
+                    }
+                    return;
+                }
+                
+                if (e.health <= 0) return;
+
+                const dx = (player.x + player.width / 2) - e.x;
+                const dy = (player.y + player.height / 2) - e.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                
+                if (e.type === 'exploder') {
+                    const chaseSpeed = 180;
+                    
+                    if (dist > 0) {
+                        e.vx = (dx / dist) * chaseSpeed;
+                        e.vy = (dy / dist) * chaseSpeed;
+                    }
+
+                    e.x += e.vx * dt;
+                    e.y += e.vy * dt;
+                    
+                    if (player.invincible <= 0) {
+                        const pdx = e.x - (player.x + player.width / 2);
+                        const pdy = e.y - (player.y + player.height / 2);
+                        const pdist = Math.sqrt(pdx * pdx + pdy * pdy);
+                        if (pdist < e.radius + 15) {
+                            player.health -= 1;
+                            player.invincible = 1.5;
+                            for (let i = 0; i < 8; i++) {
+                                createParticle(
+                                    player.x + player.width / 2,
+                                    player.y + player.height / 2,
+                                    '#ff4444',
+                                    (Math.random() - 0.5) * 200,
+                                    (Math.random() - 0.5) * 200,
+                                    0.4
+                                );
+                            }
+                        }
+                    }
+                } else if (e.type === 'ranged') {
+                    const idealDist = 200;
+                    const moveSpeed = 60;
+                    
+                    if (dist < idealDist - 50) {
+                        e.vx = -(dx / dist) * moveSpeed;
+                        e.vy = -(dy / dist) * moveSpeed;
+                    } else if (dist > idealDist + 50) {
+                        e.vx = (dx / dist) * moveSpeed;
+                        e.vy = (dy / dist) * moveSpeed;
+                    } else {
+                        e.vx *= 0.9;
+                        e.vy *= 0.9;
+                    }
+                    
+                    e.x += e.vx * dt;
+                    e.y += e.vy * dt;
+                    
+                    e.shootTimer += dt;
+                    if (e.shootTimer >= e.shootCooldown) {
+                        e.shootTimer = 0;
+                        projectiles.push(createProjectile(
+                            e.x, e.y,
+                            player.x + player.width / 2,
+                            player.y + player.height / 2
+                        ));
+                        
+                        for (let i = 0; i < 8; i++) {
+                            createParticle(
+                                e.x, e.y,
+                                '#ffff88',
+                                (Math.random() - 0.5) * 150,
+                                (Math.random() - 0.5) * 150,
+                                0.3
+                            );
+                        }
+                    }
+                } else {
+                    const chaseSpeed = 120;
+                    
+                    if (dist > 0) {
+                        e.vx = (dx / dist) * chaseSpeed;
+                        e.vy = (dy / dist) * chaseSpeed;
+                    }
+
+                    e.x += e.vx * dt;
+                    e.y += e.vy * dt;
+                    
+                    if (player.invincible <= 0) {
+                        const pdx = e.x - (player.x + player.width / 2);
+                        const pdy = e.y - (player.y + player.height / 2);
+                        const pdist = Math.sqrt(pdx * pdx + pdy * pdy);
+                        if (pdist < e.radius + 15) {
+                            player.health -= 1;
+                            player.invincible = 1.5;
+                            for (let i = 0; i < 8; i++) {
+                                createParticle(
+                                    player.x + player.width / 2,
+                                    player.y + player.height / 2,
+                                    '#ff4444',
+                                    (Math.random() - 0.5) * 200,
+                                    (Math.random() - 0.5) * 200,
+                                    0.4
+                                );
+                            }
+                        }
+                    }
+                }
+            });
+            
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                const e = enemies[i];
+                if (e.type === 'exploder' && e.health <= 0 && e.explodeTimer >= e.explodeDuration) {
+                    enemies.splice(i, 1);
+                }
+            }
+        }
+        
+        function updateExplosions(dt) {
+            for (let i = explosions.length - 1; i >= 0; i--) {
+                explosions[i].timer += dt;
+                if (explosions[i].timer >= explosions[i].duration) {
+                    explosions.splice(i, 1);
+                }
+            }
+        }
+        
+        function updateProjectiles(dt) {
+            for (let i = projectiles.length - 1; i >= 0; i--) {
+                const proj = projectiles[i];
+                
+                proj.x += proj.vx * dt;
+                proj.y += proj.vy * dt;
+                proj.lifetime -= dt;
+                
+                if (proj.lifetime <= 0 || proj.x < 0 || proj.x > canvas.width || 
+                    proj.y < 0 || proj.y > canvas.height) {
+                    projectiles.splice(i, 1);
+                    continue;
+                }
+                
+                if (player.invincible <= 0) {
+                    const dx = proj.x - (player.x + player.width / 2);
+                    const dy = proj.y - (player.y + player.height / 2);
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (dist < proj.radius + 10) {
+                        player.health -= 1;
+                        player.invincible = 1.5;
+                        projectiles.splice(i, 1);
+                        
+                        for (let j = 0; j < 12; j++) {
+                            createParticle(
+                                proj.x, proj.y,
+                                '#ffaa00',
+                                (Math.random() - 0.5) * 250,
+                                (Math.random() - 0.5) * 250,
+                                0.5
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        function drawUI() {
+            const heartSize = 30;
+            const heartSpacing = 35;
+            const heartY = canvas.height - 50;
+            
+            for (let i = 0; i < player.maxHealth; i++) {
+                const heartX = 20 + i * heartSpacing;
+                const filled = i < player.health;
+                
+                ctx.save();
+                ctx.translate(heartX, heartY);
+                
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+                ctx.beginPath();
+                ctx.moveTo(0, 8);
+                ctx.bezierCurveTo(-12, -5, -12, -12, 0, -18);
+                ctx.bezierCurveTo(12, -12, 12, -5, 0, 8);
+                ctx.fill();
+                
+                if (filled) {
+                    const heartGradient = ctx.createRadialGradient(-5, -5, 5, 0, 0, 20);
+                    heartGradient.addColorStop(0, '#ff6b6b');
+                    heartGradient.addColorStop(1, '#cc0000');
+                    ctx.fillStyle = heartGradient;
+                } else {
+                    ctx.fillStyle = 'rgba(80, 80, 100, 0.5)';
+                }
+                
+                ctx.beginPath();
+                ctx.moveTo(0, 5);
+                ctx.bezierCurveTo(-10, -7, -10, -13, 0, -20);
+                ctx.bezierCurveTo(10, -13, 10, -7, 0, 5);
+                ctx.fill();
+                
+                ctx.strokeStyle = filled ? '#990000' : 'rgba(60, 60, 80, 0.8)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(0, 5);
+                ctx.bezierCurveTo(-10, -7, -10, -13, 0, -20);
+                ctx.bezierCurveTo(10, -13, 10, -7, 0, 5);
+                ctx.stroke();
+                
+                if (filled) {
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+                    ctx.beginPath();
+                    ctx.arc(-4, -8, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                
+                ctx.restore();
+            }
+            
+            const aliveEnemies = enemies.filter(e => e.health > 0).length;
+            ctx.fillStyle = '#e0d0ff';
+            ctx.font = 'bold 16px Courier New';
+            ctx.textAlign = 'right';
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+            ctx.shadowBlur = 4;
+            ctx.fillText('Wave: ' + wave, canvas.width - 20, canvas.height - 45);
+            ctx.fillText('Nemici: ' + aliveEnemies, canvas.width - 20, canvas.height - 20);
+            ctx.shadowBlur = 0;
+        }
+
+        const stars = [];
+        for (let i = 0; i < 100; i++) {
+            stars.push({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height,
+                size: Math.random() * 2,
+                speed: Math.random() * 0.5 + 0.1,
+                brightness: Math.random()
+            });
+        }
+
+        function drawBackground() {
+            stars.forEach(star => {
+                star.brightness += Math.random() * 0.1 - 0.05;
+                star.brightness = Math.max(0.3, Math.min(1, star.brightness));
+                ctx.fillStyle = `rgba(200, 180, 255, ${star.brightness * 0.6})`;
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+        
+        function drawDeathScreen() {
+            deathTimer += 0.016;
+            
+            const alpha = Math.min(deathTimer / 2, 0.8);
+            ctx.fillStyle = `rgba(0, 0, 0, ${alpha})`;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            if (deathTimer > 1) {
+                const textAlpha = Math.min((deathTimer - 1) / 1.5, 1);
+                ctx.globalAlpha = textAlpha;
+                
+                ctx.fillStyle = '#ff4444';
+                ctx.font = 'bold 64px Courier New';
+                ctx.textAlign = 'center';
+                ctx.shadowColor = 'rgba(255, 68, 68, 0.8)';
+                ctx.shadowBlur = 20;
+                ctx.fillText('YOU DIED', canvas.width / 2, canvas.height / 2 - 30);
+                
+                if (deathTimer > 2.5) {
+                    ctx.font = 'bold 24px Courier New';
+                    ctx.fillStyle = '#e0d0ff';
+                    ctx.shadowColor = 'rgba(224, 208, 255, 0.5)';
+                    ctx.shadowBlur = 10;
+                    ctx.fillText('Premi R per ricominciare', canvas.width / 2, canvas.height / 2 + 40);
+                }
+                
+                ctx.shadowBlur = 0;
+                ctx.globalAlpha = 1;
+            }
+        }
+        
+        function restartGame() {
+            gameState = 'playing';
+            wave = 1;
+            player.health = player.maxHealth;
+            player.x = 100;
+            player.y = 400;
+            player.vx = 0;
+            player.vy = 0;
+            player.invincible = 0;
+            
+            enemies.length = 0;
+            enemies.push(createEnemy(300, 200));
+            enemies.push(createEnemy(500, 150));
+            enemies.push(createEnemy(650, 250));
+            enemies.push(createRangedEnemy(400, 120));
+            
+            projectiles.length = 0;
+            particles.length = 0;
+            explosions.length = 0;
+        }
+
+        function gameLoop(currentTime) {
+            const dt = Math.min((currentTime - lastTime) / 1000, 0.1);
+            lastTime = currentTime;
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            drawBackground();
+            drawPlatforms();
+            drawParticles();
+            drawProjectiles();
+            drawExplosions();
+            drawEnemies();
+            drawPlayer();
+            drawUI();
+            
+            if (gameState === 'playing') {
+                if (dt > 0) {
+                    updatePlayer(dt);
+                    updateEnemies(dt);
+                    updateProjectiles(dt);
+                    updateExplosions(dt);
+                    updateParticles(dt);
+                    
+                    const aliveEnemies = enemies.filter(e => e.health > 0).length;
+                    if (aliveEnemies === 0) {
+                        spawnNewWave();
+                    }
+                }
+            } else if (gameState === 'dead') {
+                drawDeathScreen();
+            }
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
